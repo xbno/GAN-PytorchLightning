@@ -1,6 +1,6 @@
 import torch.nn as nn
 import torch
-from schemes import GeneratorInput, RepresentationBaseInput
+import schemes
 import torch.nn.functional as F
 
 # --------------------------------------------------------------- #
@@ -20,7 +20,7 @@ class PrintShape(nn.Module):
 # --- Convolutional Generator & Distriminator --- #
 # ----------------------------------------------- #
 class ConvolutionalGenerator(nn.Module):
-    def __init__(self, config: GeneratorInput):
+    def __init__(self, config: schemes.GeneratorInput):
         super(ConvolutionalGenerator, self).__init__()
         self.params = config
 
@@ -49,7 +49,7 @@ class ConvolutionalGenerator(nn.Module):
 
 
 class ConvolutionalBase(nn.Module):
-    def __init__(self, config: RepresentationBaseInput):
+    def __init__(self, config: schemes.RepresentationBaseInput):
         super(ConvolutionalBase, self).__init__()
         self.params = config
 
@@ -72,7 +72,7 @@ class ConvolutionalBase(nn.Module):
 
 
 class Discriminator(ConvolutionalBase):
-    def __init__(self, config: RepresentationBaseInput):
+    def __init__(self, config: schemes.RepresentationBaseInput):
         super().__init__(config)
 
         self.model = nn.Sequential(
@@ -86,7 +86,7 @@ class Discriminator(ConvolutionalBase):
 
 
 class ContrastiveLearner(ConvolutionalBase):
-    def __init__(self, config: RepresentationBaseInput):
+    def __init__(self, config: schemes.RepresentationBaseInput):
         super().__init__(config)
         self.contrastive_dim = config.contrastive_dim
 
@@ -261,11 +261,10 @@ class Bottleneck(nn.Module):
 class VideoResNet(nn.Module):
     def __init__(
         self,
-        num_channels,
         block,
         conv_makers,
         layers,
-        stem,
+        backbone,
         num_classes=400,
         zero_init_residual=False,
     ):
@@ -281,8 +280,7 @@ class VideoResNet(nn.Module):
         super(VideoResNet, self).__init__()
         self.inplanes = 64
 
-        # self.stem = stem(num_channels=num_channels)
-        self.stem = stem
+        self.backbone = backbone
 
         self.layer1 = self._make_layer(block, conv_makers[0], 64, layers[0], stride=1)
         self.layer2 = self._make_layer(block, conv_makers[1], 128, layers[1], stride=2)
@@ -301,7 +299,7 @@ class VideoResNet(nn.Module):
                     nn.init.constant_(m.bn3.weight, 0)
 
     def forward(self, x):
-        x = self.stem(x)
+        x = self.backbone(x)
 
         x = self.layer1(x)
         x = self.layer2(x)
@@ -353,17 +351,31 @@ class VideoResNet(nn.Module):
                 nn.init.constant_(m.bias, 0)
 
 
+class R2p1Discriminator(VideoResNet):
+    def __init__(self, config: schemes.R2p1RepresentationBaseInput):
+        super().__init__(config)
+
+        self.model = nn.Sequential(
+            nn.Linear(4 * 4 * 256, 1024), nn.ReLU(), nn.Linear(1024, 1), nn.Sigmoid()
+        )
+
+    def forward(self, x: torch.Tensor):
+        mid_representation = self.backbone(x)
+        prediction = self.model(mid_representation).squeeze()
+        return prediction
+
+
 if __name__ == "__main__":
 
     def testGenerator():
-        gen_input = GeneratorInput(latent_dim=50, dropout=0.0)
+        gen_input = schemes.GeneratorInput(latent_dim=50, dropout=0.0)
         gen = ConvolutionalGenerator(gen_input)
         input = torch.randn(2, 50)
         output = gen(input)
         print(output.shape)
 
     def testDiscriminatorAndContrastiveLearner():
-        d_input = RepresentationBaseInput(
+        d_input = schemes.RepresentationBaseInput(
             dropout=0.0,
             representation_dim=1024,
             contrastive_dim=512,
@@ -378,15 +390,36 @@ if __name__ == "__main__":
         print(c_output[0].shape, c_output[1].shape)
         print("Test")
 
+    def testR2p1DiscriminatorAndContrastiveLearner():
+        d_input = schemes.R2p1RepresentationBaseInput(
+            dropout=0.0,
+            representation_dim=1024,
+            contrastive_dim=512,
+            output_channels=4,
+            block=BasicBlock,
+            conv_makers=[Conv2Plus1D] * 4,
+            layers=[2, 2, 2, 2],
+            backbone=R2Plus1dStem(num_channels=15),
+        )
+        discriminator = R2p1Discriminator(d_input)
+        contrastive_learner = ContrastiveLearner(d_input)
+        input = torch.randn(2, 4, 180, 20, 2)
+        d_output = discriminator(input)
+        c_output = contrastive_learner(input)
+        print(d_output.shape)
+        print(c_output[0].shape, c_output[1].shape)
+        print("Test")
+
     # testDiscriminatorAndContrastiveLearner()
-    r2plus1d = VideoResNet(
-        num_channels=15,
-        block=BasicBlock,
-        conv_makers=[Conv2Plus1D] * 4,
-        layers=[2, 2, 2, 2],
-        # stem=R2Plus1dStem,
-        stem=R2Plus1dStem(num_channels=15),
-    )
-    i = torch.randn(2, 15, 180, 20, 2)
-    o = r2plus1d(i)
-    o
+    testR2p1DiscriminatorAndContrastiveLearner()
+
+    def testVideoResNet():
+        r2plus1d = VideoResNet(
+            block=BasicBlock,
+            conv_makers=[Conv2Plus1D] * 4,
+            layers=[2, 2, 2, 2],
+            backbone=R2Plus1dStem(num_channels=15),
+        )
+        i = torch.randn(2, 15, 180, 20, 2)  # samples, channels, strikes, exps, types
+        o = r2plus1d(i)
+        o

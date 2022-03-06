@@ -1,50 +1,71 @@
 from pydantic import validator
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Optional, List
+
 
 @dataclass
-class GeneratorInput():
+class GeneratorInput:
     latent_dim: int
     dropout: float
     output_channels: int
-    
-    @validator('dropout')
+
+    @validator("dropout")
     def is_probability(cls, value):
         if value > 1.0 or value < 0.0:
-            raise ValueError('Dropout must be a float in [0, 1].')
-        return value 
+            raise ValueError("Dropout must be a float in [0, 1].")
+        return value
+
 
 @dataclass
-class RepresentationBaseInput():
+class RepresentationBaseInput:
     representation_dim: int
     dropout: float
-    output_channels: int 
+    output_channels: int
     contrastive_dim: Optional[int] = None
-    
-    @validator('dropout')
+
+    @validator("dropout")
     def is_probability(cls, value):
         if value > 1.0 or value < 0.0:
-            raise ValueError('Dropout must be a float in [0, 1].')
-        return value 
-    
+            raise ValueError("Dropout must be a float in [0, 1].")
+        return value
+
+
 @dataclass
-class GANBaseInput():
+class R2p1RepresentationBaseInput:
+    representation_dim: int
+    dropout: float
+    output_channels: int
+    block: Optional[any]  #: neural_networks.BasicBlock
+    conv_makers: Optional[any]  #: List[neural_networks.Conv2Plus1D]
+    layers: List[int]
+    backbone: Optional[any]  #: Optional[neural_networks.R2Plus1dStem]
+    contrastive_dim: Optional[int] = None
+
+    @validator("dropout")
+    def is_probability(cls, value):
+        if value > 1.0 or value < 0.0:
+            raise ValueError("Dropout must be a float in [0, 1].")
+        return value
+
+
+@dataclass
+class GANBaseInput:
     generator_dropout: float = 0.0
     generator_latent_dim: int = 100
     representation_dim: int = 1024
     discriminator_dropout: float = 0.0
     output_channels: int = 1
     contrastive_dim: int = 512
-    
-    @validator('generator_dropout', 'discriminator_dropout')
+
+    @validator("generator_dropout", "discriminator_dropout")
     def is_probability(cls, value):
         if value > 1.0 or value < 0.0:
-            raise ValueError('Dropout must be a float in [0, 1].')
-        return value 
+            raise ValueError("Dropout must be a float in [0, 1].")
+        return value
 
-    
+
 @dataclass
-class GANTrainInput():
+class GANTrainInput:
     epochs: int = 100
     snapshot: int = 20
     generator_lr: float = 2e-4
@@ -58,13 +79,10 @@ class GANTrainInput():
     representation_beta2: float = 0.999
     contrastive_temperature: float = 0.5
     random_seed: int = 1602
-    
+
+
 @dataclass
-class DataInput():
-    data_dir: str = '/home/petra/Documents/PhD/Repos/datasets'
+class DataInput:
+    data_dir: str = "/home/petra/Documents/PhD/Repos/datasets"
     batch_size: int = 128
     num_workers: int = 0
-
-    
-    
-    
