@@ -1,6 +1,7 @@
 import torch.nn as nn
 import torch
 import schemes
+from architectures import convNd, resnet
 import torch.nn.functional as F
 
 # --------------------------------------------------------------- #
@@ -119,80 +120,112 @@ class ContrastiveLearner(ConvolutionalBase):
 
 # ----------------------------------------------- #
 # ---             ResNet2+1d                  --- #
+# ---  https://arxiv.org/pdf/1711.11248.pdf   --- #
+# ----------------------------------------------- #
+# https://github.com/pytorch/vision/blob/5a315453da5089d66de94604ea49334a66552524/torchvision/models/video/resnet.py#L275
+
+
+# ----------------------------------------------- #
+# ---             ResNet3+1d                  --- #
+# question
+# where to reduce calls and puts into a single dim?
+#
+# have r(2+1)d for both calls and puts seperately
+# until the end of the blocks?
+#
+# after the "stem"
+# or
+#
 # ----------------------------------------------- #
 
 
-class R2Plus1dStem(nn.Sequential):
-    """R(2+1)D stem is different than the default one as it uses separated 3D convolution"""
+class R3Plus1dStem(nn.Sequential):
+    """R(3+1)D stem is different than the default one as it uses separated 4D convolution"""
 
     def __init__(self, num_channels):
-        super(R2Plus1dStem, self).__init__(
-            nn.Conv3d(
+        super(R3Plus1dStem, self).__init__(
+            convNd.Conv4d(
                 num_channels,
                 45,
-                kernel_size=(1, 7, 7),
-                stride=(1, 2, 2),
-                padding=(0, 3, 3),
+                kernel_size=(1, 7, 7, 1),
+                stride=(1, 2, 2, 1),
+                padding=(0, 3, 3, 0),
                 bias=False,
             ),
-            nn.BatchNorm3d(45),
+            convNd.BatchNorm4d(45),
             nn.ReLU(inplace=True),
-            nn.Conv3d(
+            convNd.Conv4d(
                 45,
                 64,
-                kernel_size=(3, 1, 1),
-                stride=(1, 1, 1),
-                padding=(1, 0, 0),
+                kernel_size=(3, 1, 1, 1),
+                stride=(1, 1, 1, 1),
+                padding=(1, 0, 0, 0),
                 bias=False,
             ),
-            nn.BatchNorm3d(64),
+            convNd.BatchNorm4d(64),
             nn.ReLU(inplace=True),
         )
 
 
-class Conv2Plus1D(nn.Sequential):
+class Conv3Plus1D(nn.Sequential):
     def __init__(self, in_planes, out_planes, midplanes, stride=1, padding=1):
-        super(Conv2Plus1D, self).__init__(
-            nn.Conv3d(
+        super(Conv3Plus1D, self).__init__(
+            convNd.Conv4d(
                 in_planes,
                 midplanes,
-                kernel_size=(1, 3, 3),
-                stride=(1, stride, stride),
-                padding=(0, padding, padding),
+                kernel_size=(1, 3, 3, 1),
+                stride=(1, stride, stride, 1),
+                padding=(0, padding, padding, 0),
                 bias=False,
             ),
-            nn.BatchNorm3d(midplanes),
+            convNd.BatchNorm4d(midplanes),
             nn.ReLU(inplace=True),
-            nn.Conv3d(
+            convNd.Conv4d(
                 midplanes,
                 out_planes,
-                kernel_size=(3, 1, 1),
-                stride=(stride, 1, 1),
-                padding=(padding, 0, 0),
+                kernel_size=(3, 1, 1, 1),
+                stride=(stride, 1, 1, 1),
+                padding=(padding, 0, 0, 0),
                 bias=False,
             ),
         )
 
     @staticmethod
+    def dims():
+        return 4
+
+    @staticmethod
     def get_downsample_stride(stride):
-        return stride, stride, stride
+        return stride, stride, stride, stride
 
 
 class BasicBlock(nn.Module):
 
     expansion = 1
 
-    def __init__(self, inplanes, planes, conv_builder, stride=1, downsample=None):
+    def __init__(
+        self,
+        inplanes,
+        planes,
+        conv_builder,
+        stride=1,
+        downsample=None,
+    ):
         midplanes = (inplanes * planes * 3 * 3 * 3) // (inplanes * 3 * 3 + 3 * planes)
 
         super(BasicBlock, self).__init__()
         self.conv1 = nn.Sequential(
             conv_builder(inplanes, planes, midplanes, stride),
-            nn.BatchNorm3d(planes),
+            convNd.BatchNorm4d(planes)
+            if conv_builder.dims() == 4
+            else nn.BatchNorm3d(planes),
             nn.ReLU(inplace=True),
         )
         self.conv2 = nn.Sequential(
-            conv_builder(planes, planes, midplanes), nn.BatchNorm3d(planes)
+            conv_builder(planes, planes, midplanes),
+            convNd.BatchNorm4d(planes)
+            if conv_builder.dims() == 4
+            else nn.BatchNorm3d(planes),
         )
         self.relu = nn.ReLU(inplace=True)
         self.downsample = downsample
@@ -222,21 +255,21 @@ class Bottleneck(nn.Module):
 
         # 1x1x1
         self.conv1 = nn.Sequential(
-            nn.Conv3d(inplanes, planes, kernel_size=1, bias=False),
-            nn.BatchNorm3d(planes),
+            convNd.Conv4d(inplanes, planes, kernel_size=1, bias=False),
+            convNd.BatchNorm4d(planes),
             nn.ReLU(inplace=True),
         )
         # Second kernel
         self.conv2 = nn.Sequential(
             conv_builder(planes, planes, midplanes, stride),
-            nn.BatchNorm3d(planes),
+            convNd.BatchNorm4d(planes),
             nn.ReLU(inplace=True),
         )
 
         # 1x1x1
         self.conv3 = nn.Sequential(
-            nn.Conv3d(planes, planes * self.expansion, kernel_size=1, bias=False),
-            nn.BatchNorm3d(planes * self.expansion),
+            convNd.Conv4d(planes, planes * self.expansion, kernel_size=1, bias=False),
+            convNd.BatchNorm4d(planes * self.expansion),
         )
         self.relu = nn.ReLU(inplace=True)
         self.downsample = downsample
@@ -282,10 +315,32 @@ class VideoResNet(nn.Module):
 
         self.backbone = backbone
 
-        self.layer1 = self._make_layer(block, conv_makers[0], 64, layers[0], stride=1)
-        self.layer2 = self._make_layer(block, conv_makers[1], 128, layers[1], stride=2)
-        self.layer3 = self._make_layer(block, conv_makers[2], 256, layers[2], stride=2)
-        self.layer4 = self._make_layer(block, conv_makers[3], 512, layers[3], stride=2)
+        self.layer1 = self._make_layer(
+            block, conv_makers[0], 64, layers[0], stride=1, padding=0
+        )
+        self.layer2 = self._make_layer(
+            block, conv_makers[1], 128, layers[1], stride=2, padding=0
+        )
+        self.dim_reduction = nn.Sequential(
+            convNd.Conv4d(
+                128,
+                128,
+                # maybe (1, 14, 3, 1) since ~300 strikes only ~20 exps
+                kernel_size=(1, 1, 1, 2),
+                # maybe (0, 0, 0, 0) because theres literally nothing existing beyond the edge
+                padding=(0, 0, 0, 0),
+                stride=(1, 1, 1, 1),
+                bias=False,
+            ),
+            convNd.BatchNorm4d(128),
+            nn.ReLU(inplace=True),
+        )
+        self.layer3 = self._make_layer(
+            block, conv_makers[2], 256, layers[2], stride=2, padding=0
+        )
+        self.layer4 = self._make_layer(
+            block, conv_makers[3], 512, layers[3], stride=2, padding=0
+        )
 
         self.avgpool = nn.AdaptiveAvgPool3d((1, 1, 1))
         self.fc = nn.Linear(512 * block.expansion, num_classes)
@@ -299,35 +354,62 @@ class VideoResNet(nn.Module):
                     nn.init.constant_(m.bn3.weight, 0)
 
     def forward(self, x):
+        # Conv4d - batch, days, channels, strikes, exps, types
         x = self.backbone(x)
 
         x = self.layer1(x)
         x = self.layer2(x)
+        x = torch.squeeze(self.dim_reduction(x), 5)
+
+        # Conv3d - batch, days, channels, strikes, exps
         x = self.layer3(x)
         x = self.layer4(x)
 
         x = self.avgpool(x)
+
         # Flatten the layer to fc
         x = x.flatten(1)
         x = self.fc(x)
 
         return x
 
-    def _make_layer(self, block, conv_builder, planes, blocks, stride=1):
-        downsample = None
+    def _make_layer(self, block, conv_builder, planes, blocks, stride=1, padding=1):
+        if conv_builder.dims() == 4:
+            # if isinstance(conv_builder, convNd.Conv4d):
+            downsample = None
 
-        if stride != 1 or self.inplanes != planes * block.expansion:
-            ds_stride = conv_builder.get_downsample_stride(stride)
-            downsample = nn.Sequential(
-                nn.Conv3d(
-                    self.inplanes,
-                    planes * block.expansion,
-                    kernel_size=1,
-                    stride=ds_stride,
-                    bias=False,
-                ),
-                nn.BatchNorm3d(planes * block.expansion),
-            )
+            if stride != 1 or self.inplanes != planes * block.expansion:
+                ds_stride = conv_builder.get_downsample_stride(stride)
+                downsample = nn.Sequential(
+                    convNd.Conv4d(
+                        self.inplanes,
+                        planes * block.expansion,
+                        kernel_size=1,
+                        stride=ds_stride,
+                        padding=padding,
+                        bias=False,
+                    ),
+                    convNd.BatchNorm4d(planes * block.expansion),
+                )
+
+        elif conv_builder.dims() == 3:
+            # elif isinstance(conv_builder, nn.Conv3d):
+            downsample = None
+
+            if stride != 1 or self.inplanes != planes * block.expansion:
+                ds_stride = conv_builder.get_downsample_stride(stride)
+                downsample = nn.Sequential(
+                    nn.Conv3d(
+                        self.inplanes,
+                        planes * block.expansion,
+                        kernel_size=1,
+                        stride=ds_stride,
+                        padding=padding,
+                        bias=False,
+                    ),
+                    nn.BatchNorm3d(planes * block.expansion),
+                )
+
         layers = []
         layers.append(block(self.inplanes, planes, conv_builder, stride, downsample))
 
@@ -339,6 +421,7 @@ class VideoResNet(nn.Module):
 
     def _initialize_weights(self):
         for m in self.modules():
+            # r2plus1
             if isinstance(m, nn.Conv3d):
                 nn.init.kaiming_normal_(m.weight, mode="fan_out", nonlinearity="relu")
                 if m.bias is not None:
@@ -346,6 +429,18 @@ class VideoResNet(nn.Module):
             elif isinstance(m, nn.BatchNorm3d):
                 nn.init.constant_(m.weight, 1)
                 nn.init.constant_(m.bias, 0)
+            # r3plus1
+            elif isinstance(m, convNd.Conv4d):
+                for conv_layer in m.conv_layers:
+                    nn.init.kaiming_normal_(
+                        conv_layer.weight, mode="fan_out", nonlinearity="relu"
+                    )
+                    if conv_layer.bias is not None:
+                        nn.init.constant_(conv_layer.bias, 0)
+            elif isinstance(m, convNd.BatchNorm4d):
+                nn.init.constant_(m.weight, 1)
+                nn.init.constant_(m.bias, 0)
+            # std
             elif isinstance(m, nn.Linear):
                 nn.init.normal_(m.weight, 0, 0.01)
                 nn.init.constant_(m.bias, 0)
@@ -410,16 +505,35 @@ if __name__ == "__main__":
         print(c_output[0].shape, c_output[1].shape)
         print("Test")
 
-    # testDiscriminatorAndContrastiveLearner()
-    testR2p1DiscriminatorAndContrastiveLearner()
-
-    def testVideoResNet():
+    def testR2plus1d():
         r2plus1d = VideoResNet(
-            block=BasicBlock,
-            conv_makers=[Conv2Plus1D] * 4,
+            block=resnet.BasicBlock,
+            conv_makers=[resnet.Conv2Plus1D] * 4,
             layers=[2, 2, 2, 2],
-            backbone=R2Plus1dStem(num_channels=15),
+            backbone=resnet.R2Plus1dStem(num_channels=15),
         )
         i = torch.randn(2, 15, 180, 20, 2)  # samples, channels, strikes, exps, types
         o = r2plus1d(i)
         o
+
+    def testR3plus1d():
+        r3plus1d = VideoResNet(
+            block=BasicBlock,
+            conv_makers=[
+                Conv3Plus1D,
+                Conv3Plus1D,
+                resnet.Conv2Plus1D,
+                resnet.Conv2Plus1D,
+            ],
+            layers=[2, 2, 2, 2],
+            backbone=R3Plus1dStem(num_channels=15),
+        )
+        # samples, channels, days, strikes, exps, types
+        i = torch.randn(2, 15, 30, 180, 20, 2)
+        o = r3plus1d(i)
+        o
+
+    # testDiscriminatorAndContrastiveLearner()
+    # testR2p1DiscriminatorAndContrastiveLearner()
+    # testR2plus1d()
+    testR3plus1d()
