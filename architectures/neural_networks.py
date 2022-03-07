@@ -147,9 +147,9 @@ class R3Plus1dStem(nn.Sequential):
             convNd.Conv4d(
                 num_channels,
                 45,
-                kernel_size=(1, 7, 7, 1),
-                stride=(1, 2, 2, 1),
-                padding=(0, 3, 3, 0),
+                kernel_size=(1, 7, 5, 1),  # (1, 14, 5, 1),  # (1,7,7,1)
+                stride=(1, 2, 1, 1),  # (1, 2, 2, 1),
+                padding=(0, 3, 2, 0),
                 bias=False,
             ),
             convNd.BatchNorm4d(45),
