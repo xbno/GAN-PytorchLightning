@@ -31,14 +31,11 @@ class RepresentationBaseInput:
 
 
 @dataclass
-class R2p1RepresentationBaseInput:
+class R3plus1dRepresentationBaseInput:
+    num_channels: int
     representation_dim: int
     dropout: float
     output_channels: int
-    block: Optional[any]  #: neural_networks.BasicBlock
-    conv_makers: Optional[any]  #: List[neural_networks.Conv2Plus1D]
-    layers: List[int]
-    backbone: Optional[any]  #: Optional[neural_networks.R2Plus1dStem]
     contrastive_dim: Optional[int] = None
 
     @validator("dropout")
