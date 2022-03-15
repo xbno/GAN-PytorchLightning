@@ -1,8 +1,8 @@
 import torch
 from schemes import (
-    GANBaseInput,
+    # GANBaseInput,
     GANTrainInput,
-    GeneratorInput,
+    # GeneratorInput,
     R3plus1dRepresentationBaseInput,
 )
 from architectures.neural_networks import (
@@ -284,3 +284,92 @@ class ContrastiveR3plus1d(LightningModule):
         sample_imgs = self.generator(z)
         grid = torchvision.utils.make_grid(sample_imgs)
         self.logger.experiment.add_image(name, grid, self.current_epoch)
+
+
+if __name__ == "__main__":
+    from pl_bolts.losses.self_supervised_learning import (
+        FeatureMapContrastiveTask,
+        nt_xent_loss,
+    )
+
+    # actual use case is
+
+    # idea is a different than the standard approach which is something like this:
+    # https://github.com/khuongnd/advanced_ml_algorithms/blob/daec642df355b54572b742de25910420d812dcfd/02_self_supervised/amdim/amdim_module.py
+    # training step
+    # [img_1, img_2], _ = batch
+    # # extract from diff resnet blocks
+    # r1_x1, r5_x1, r7_x1, r1_x2, r5_x2, r7_x2 = forward(img_1, img_2)
+    # # training step end, calc loss
+    # loss, lgt_reg = FeatureMapContrastiveTask('01, 02, 11')((r1_x1, r5_x1, r7_x1), (r1_x2, r5_x2, r7_x2))
+    # unsupervised_loss = loss.sum() + lgt_reg
+
+    # instead i'll do less representation comparisons but include an extra anc -> pos by using symbol as the
+    # "augmentation" instead of time. so there will be 3x anc:pos matches instead of 2
+    # aug: same symbol diff time
+    # anc1: timeframe_1_symbol_1
+    # pos1: timeframe_2_symbol_1
+
+    # aug: same symbol diff time
+    # anc2: timeframe_2_symbol_2
+    # pos2: timeframe_3_symbol_2
+
+    # aug: diff symbols same time
+    # pos1: timeframe_2_symbol_1
+    # anc2: timeframe_2_symbol_2
+
+    # # FeatureMapContrastiveTask('01, 02, 11')((representations_of_anchor), (representations_of_anchor_aug))
+    # # training step
+    # [
+    #     timeframe_1_symbol_1,
+    #     timeframe_2_symbol_1,
+    #     timeframe_2_symbol_2,
+    #     timeframe_3_symbol_2,
+    # ] = batch
+    # rep_t1_s1, rep_t2_s1, rep_t2_s2, rep_t3_s2 = forward(
+    #     timeframe_1_symbol_1,
+    #     timeframe_2_symbol_1,
+    #     timeframe_2_symbol_2,
+    #     timeframe_3_symbol_2,
+    # )
+    # FeatureMapContrastiveTask("00, 11, 10")(
+    #     (rep_t1_s1, rep_t2_s2),
+    #     (rep_t2_s1, rep_t3_s2),
+    # )
+
+    b = 24
+    k = 5
+    h = 1
+    w = 1
+
+    # first run x1 and x2 through encoder which is results in
+    pass
+
+    # then
+    # r1_anchors = torch.rand(b, k, h, w)
+    # r3_anchors = torch.rand(b, k, h * 2, w * 2)
+    # r5_anchors = torch.rand(b, k, h * 4, w * 4)
+
+    # r1_pos = torch.rand(b, k, h, w)
+    # r3_pos = torch.rand(b, k, h * 2, w * 2)
+    # r5_pos = torch.rand(b, k, h * 4, w * 4)
+
+    # task = FeatureMapContrastiveTask("01, 02, 11")
+    # losses, regularizer = task(
+    #     (r1_anchors, r3_anchors, r5_anchors),
+    #     (r1_pos, r3_pos, r5_pos),
+    # )
+
+    # don't understand the pair selection, so..
+    r1_anchors = torch.rand(b, k, h, w)
+    r1_pos = torch.rand(b, k, h, w)
+    task = FeatureMapContrastiveTask("00")
+    losses, regularizer = task(
+        (r1_anchors,),
+        (r1_pos,),
+    )
+
+    # probably just stick to simclr style single anchor/pos_aug with 1 feat vector per
+    r1_anchor_flattened = torch.rand(b, k)
+    r1_pos_flattened = torch.rand(b, k)
+    loss = nt_xent_loss(r1_anchor_flattened, r1_pos_flattened, 0.5)
