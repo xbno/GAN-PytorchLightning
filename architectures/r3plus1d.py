@@ -21,7 +21,7 @@ import torch.nn.functional as F
 class R3Plus1dStem(nn.Sequential):
     """R(3+1)D stem is different than the default one as it uses separated 4D convolution"""
 
-    def __init__(self, num_channels):
+    def __init__(self, num_channels, outplanes):
         super(R3Plus1dStem, self).__init__(
             convNd.Conv4d(
                 num_channels,
@@ -35,13 +35,13 @@ class R3Plus1dStem(nn.Sequential):
             nn.ReLU(inplace=True),
             convNd.Conv4d(
                 45,
-                64,
+                outplanes,
                 kernel_size=(3, 1, 1, 1),
                 stride=(1, 1, 1, 1),
                 padding=(1, 0, 0, 0),
                 bias=False,
             ),
-            convNd.BatchNorm4d(64),
+            convNd.BatchNorm4d(outplanes),
             nn.ReLU(inplace=True),
         )
 
@@ -195,6 +195,7 @@ class VideoResNet(nn.Module):
         conv_makers,
         layers,
         backbone,
+        inplanes,
         num_classes=400,
         zero_init_residual=False,
     ):
@@ -208,20 +209,20 @@ class VideoResNet(nn.Module):
             zero_init_residual (bool, optional): Zero init bottleneck residual BN. Defaults to False.
         """
         super(VideoResNet, self).__init__()
-        self.inplanes = 64
+        self.inplanes = inplanes
 
         self.backbone = backbone
 
         self.layer1 = self._make_layer(
-            block, conv_makers[0], 64, layers[0], stride=1, padding=0
+            block, conv_makers[0], inplanes, layers[0], stride=1, padding=0
         )
         self.layer2 = self._make_layer(
-            block, conv_makers[1], 128, layers[1], stride=2, padding=0
+            block, conv_makers[1], inplanes * 2, layers[1], stride=2, padding=0
         )
         self.dim_reduction = nn.Sequential(
             convNd.Conv4d(
-                128,
-                128,
+                inplanes * 2,
+                inplanes * 2,
                 # maybe (1, 14, 3, 1) since ~300 strikes only ~20 exps
                 kernel_size=(1, 1, 1, 2),
                 # maybe (0, 0, 0, 0) because theres literally nothing existing beyond the edge
@@ -229,18 +230,18 @@ class VideoResNet(nn.Module):
                 stride=(1, 1, 1, 1),
                 bias=False,
             ),
-            convNd.BatchNorm4d(128),
+            convNd.BatchNorm4d(inplanes * 2),
             nn.ReLU(inplace=True),
         )
         self.layer3 = self._make_layer(
-            block, conv_makers[2], 256, layers[2], stride=2, padding=0
+            block, conv_makers[2], inplanes * 4, layers[2], stride=2, padding=0
         )
         self.layer4 = self._make_layer(
-            block, conv_makers[3], 512, layers[3], stride=2, padding=0
+            block, conv_makers[3], inplanes * 8, layers[3], stride=2, padding=0
         )
 
         self.avgpool = nn.AdaptiveAvgPool3d((1, 1, 1))
-        self.fc = nn.Linear(512 * block.expansion, num_classes)
+        self.fc = nn.Linear(inplanes * 8 * block.expansion, num_classes)
 
         # init weights
         self._initialize_weights()
@@ -251,14 +252,14 @@ class VideoResNet(nn.Module):
                     nn.init.constant_(m.bn3.weight, 0)
 
     def forward(self, x):
-        # Conv4d - batch, days, channels, strikes, exps, types
+        # Conv4d - batch, channels, days, strikes, exps, types
         x = self.backbone(x)
 
         x = self.layer1(x)
         x = self.layer2(x)
         x = torch.squeeze(self.dim_reduction(x), 5)
 
-        # Conv3d - batch, days, channels, strikes, exps
+        # Conv3d - batch, channels, days, strikes, exps
         x = self.layer3(x)
         x = self.layer4(x)
 
@@ -266,7 +267,7 @@ class VideoResNet(nn.Module):
 
         # Flatten the layer to fc
         x = x.flatten(1)
-        x = self.fc(x)
+        # x = self.fc(x)
 
         return x
 
